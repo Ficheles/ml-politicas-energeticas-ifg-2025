@@ -9,7 +9,7 @@ import boto3
 URL = "https://portal.inmet.gov.br/uploads/dadoshistoricos/2024.zip"
 LOCAL_ZIP = "/tmp/2024.zip"
 EXTRACT_PATH = "/tmp/inmet_data"
-S3_BUCKET = "s3://ml-politicas-energeticas/inmet-data/"
+S3_BUCKET = "ml-politicas-energeticas"
 S3_PREFIX = "inmet/2024/"
 
 default_args = {
