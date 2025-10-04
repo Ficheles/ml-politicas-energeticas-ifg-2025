@@ -1,0 +1,11 @@
+clickhouse:
+  target: dev
+  outputs:
+    dev:
+      type: clickhouse
+      schema: default
+      host: 3.21.53.164
+      port: 8123 # use 9440 for native
+      user: admin
+      password: strongpassword
+      secure: False

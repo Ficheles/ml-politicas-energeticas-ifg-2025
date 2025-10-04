@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  # ... (your existing postgres, redis, airflow services) ...
+
+  # --- ADD THE NEW DBT SERVICE DEFINITION BELOW ---
+  dbt:
+    build:
+      context: . # Path to your dbt project folder
+      dockerfile: Dockerfile
+    volumes:
+      # Mount your project code for live development without rebuilding
+      - ./ml_politicas_energeticas:/usr/app/dbt
+      # Mount your local .dbt profiles directory for credentials
+      - ~/.dbt:/root/.dbt
+    # Keep the service running to allow for exec commands
+    command: tail -f /dev/null
+
+# ... (your existing volumes definitions) ...

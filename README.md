@@ -55,3 +55,13 @@ graph TD
     CH_MART -->|Análise| F
     S3_MODELS -->|Deploy| G
 ```
+
+
+# Activate DBT env
+
+
+```bash
+ conda activate ml-dbt
+```
+
+conda deactivate

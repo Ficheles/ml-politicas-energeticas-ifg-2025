@@ -1,0 +1,2 @@
+# Specify the dbt adapter and version you need
+dbt-clickhouse
