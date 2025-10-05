@@ -6,11 +6,11 @@ import os
 import boto3
 
 # Config
-URL = "https://portal.inmet.gov.br/uploads/dadoshistoricos/2024.zip"
-LOCAL_ZIP = "/tmp/"
+URL = "https://portal.inmet.gov.br/uploads/dadoshistoricos/2021.zip"
+LOCAL_ZIP = "/tmp/2021.zip"
 EXTRACT_PATH = "/tmp/inmet_data"
 S3_BUCKET = "ml-politicas-energeticas"
-S3_PREFIX = "inmet/"
+S3_PREFIX = "inmet/2021/"
 
 default_args = {
     "owner": "airflow",
@@ -33,19 +33,13 @@ default_args = {
 def inmet_csv_to_s3():
 
     @task
-    def get_years():
-        current_year = datetime.now().year
-        return list(range(2000, current_year + 1))
-
-    @task
-    def download_file(year):
-        zip = LOCAL_ZIP + year + ".zip"
+    def download_file():
         response = requests.get(URL, stream=True)
         response.raise_for_status()
-        with open(zip, "wb") as f:
+        with open(LOCAL_ZIP, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        return zip
+        return LOCAL_ZIP
 
     @task
     def unzip_file(local_zip: str):
@@ -55,29 +49,19 @@ def inmet_csv_to_s3():
         return EXTRACT_PATH
 
     @task
-    def upload_to_s3(year, folder: str):
+    def upload_to_s3(folder: str):
         s3 = boto3.client("s3")
         for root, dirs, files in os.walk(folder):
             for file in files:
                 local_path = os.path.join(root, file)
-                s3_key = f"{S3_PREFIX}{year}/{file}"
+                s3_key = f"{S3_PREFIX}{file}"
                 s3.upload_file(local_path, S3_BUCKET, s3_key)
                 print(f"Uploaded {local_path} to s3://{S3_BUCKET}/{s3_key}")
 
+    # Task flow
+    local_zip = download_file()
+    folder = unzip_file(local_zip)
+    upload_to_s3(folder)
 
-    @task
-    def process_all():
-        years = get_years()
-
-        for year in years:
-            dl = download_file(year)
-            unzip = unzip_file(dl)
-            upload = upload_to_s3(year, unzip)
-
-            # Chain tasks using >>
-            dl >> unzip >> upload   
-
-    process_all
 
 dag = inmet_csv_to_s3()
-

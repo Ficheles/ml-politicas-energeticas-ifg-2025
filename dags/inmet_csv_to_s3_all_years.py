@@ -6,7 +6,7 @@ import os
 import boto3
 
 # Config
-URL = "https://portal.inmet.gov.br/uploads/dadoshistoricos/2024.zip"
+URL = "https://portal.inmet.gov.br/uploads/dadoshistoricos/"
 LOCAL_ZIP = "/tmp/"
 EXTRACT_PATH = "/tmp/inmet_data"
 S3_BUCKET = "ml-politicas-energeticas"
@@ -22,36 +22,37 @@ default_args = {
 }
 
 @dag(
-    dag_id="inmet_csv_to_s3_decorators",
+    dag_id="inmet_csv_to_s3_all_years_manual_4",
     default_args=default_args,
-    description="Download INMET CSV, unzip, and upload to S3 (decorators version)",
-    schedule_interval="@once",  # adjust if you want periodic runs
+    description="Download INMET CSV, unzip, and upload to S3",
+    schedule_interval="@once",
     start_date=datetime(2025, 1, 1),
     catchup=False,
     tags=["inmet", "s3", "csv"],
+    max_active_tasks=4,
+    max_active_runs=1,
+    concurrency=4,
 )
 def inmet_csv_to_s3():
 
     @task
-    def get_years():
-        current_year = datetime.now().year
-        return list(range(2000, current_year + 1))
-
-    @task
     def download_file(year):
-        zip = LOCAL_ZIP + year + ".zip"
-        response = requests.get(URL, stream=True)
+        zip_path = os.path.join(LOCAL_ZIP, f"{year}.zip")
+        url = f"{URL}{year}.zip"
+        response = requests.get(url, stream=True)
         response.raise_for_status()
-        with open(zip, "wb") as f:
+        with open(zip_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        return zip
+        print(f"Downloaded {zip_path}")
+        return zip_path
 
     @task
     def unzip_file(local_zip: str):
         os.makedirs(EXTRACT_PATH, exist_ok=True)
         with zipfile.ZipFile(local_zip, 'r') as zip_ref:
             zip_ref.extractall(EXTRACT_PATH)
+        print(f"Unzipped {local_zip} to {EXTRACT_PATH}")
         return EXTRACT_PATH
 
     @task
@@ -64,20 +65,33 @@ def inmet_csv_to_s3():
                 s3.upload_file(local_path, S3_BUCKET, s3_key)
                 print(f"Uploaded {local_path} to s3://{S3_BUCKET}/{s3_key}")
 
-
     @task
-    def process_all():
-        years = get_years()
+    def cleanup_tmp(year):
+        import shutil
+        zip_path = os.path.join(LOCAL_ZIP, f"{year}.zip")
+        folder_path = EXTRACT_PATH
+        # Remove the ZIP
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+            print(f"Deleted {zip_path}")
+        # Remove extracted folder
+        if os.path.exists(folder_path):
+            shutil.rmtree(folder_path)
+            print(f"Deleted {folder_path}")
 
-        for year in years:
-            dl = download_file(year)
-            unzip = unzip_file(dl)
-            upload = upload_to_s3(year, unzip)
+    # Generate years directly in DAG context
+    years = list(range(2000, datetime.now().year + 1))
 
-            # Chain tasks using >>
-            dl >> unzip >> upload   
+    # Loop over years and chain tasks
+    for year in years:
+        dl = download_file(year)
+        unzip = unzip_file(dl)
+        upload = upload_to_s3(year, unzip)
+        cleanup = cleanup_tmp(year)
 
-    process_all
+        # Chain tasks
+        dl >> unzip >> upload >> cleanup
+
 
 dag = inmet_csv_to_s3()
 

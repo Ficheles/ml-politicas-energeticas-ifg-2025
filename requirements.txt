@@ -1,0 +1,14 @@
+# AIRFLOW PROVIDERS: Required for S3 access and Snowflake connectivity/operators.
+apache-airflow-providers-amazon
+#apache-airflow-providers-snowflake
+apache-airflow-providers-snowflake>=4.0.0
+
+# CORE CONNECTIVITY: The underlying Python driver for Snowflake. Essential!
+snowflake-connector-python
+
+# COSMOS: The framework to convert dbt models into Airflow Tasks.
+astronomer-cosmos
+dbt-snowflake==1.7.0
+
+# ASTRO UTILITIES (Optional, but useful for local testing):
+astro-run-dag

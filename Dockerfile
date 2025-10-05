@@ -1,7 +1,2 @@
-FROM apache/airflow:2.8.1
-USER root
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    docker.io \
-    docker-compose \
-    && usermod -aG docker airflow
-USER airflow
+#FROM astrocrpublic.azurecr.io/runtime:3.1-1
+FROM quay.io/astronomer/astro-runtime:12.1.1

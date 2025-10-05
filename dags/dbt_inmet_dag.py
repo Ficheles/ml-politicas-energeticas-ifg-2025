@@ -4,7 +4,7 @@ from airflow.operators.bash import BashOperator
 from datetime import timedelta
 
 # --- Configuration ---
-DBT_PROJECT_DIR = "/opt/apps/ml-politicas-energeticas-ifg-2025/dbt/ml_politicas_energeticas"
+DBT_PROJECT_DIR = ""
 DBT_PROFILE_DIR = "~/.dbt/"
 YEARS_TO_PROCESS = [2023, 2024, 2025]
 S3_BUCKET_BASE_URL = "https://ml-politicas-energeticas.s3.us-east-2.amazonaws.com/inmet"
