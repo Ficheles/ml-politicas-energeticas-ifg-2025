@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import pendulum
+import os
+import re
+import boto3
 from airflow.models.dag import DAG
 from airflow.utils.dates import days_ago
 
@@ -11,9 +14,8 @@ from airflow.operators.empty import EmptyOperator
 
 # Define S3 and Snowflake parameters
 S3_BUCKET = "ml-politicas-energeticas/inmet"
-# define years and cities to iterate
+# define years to iterate
 YEARS = [2020, 2021, 2022, 2023, 2024, 2025]
-CITIES = ["GOIANIA", "INHUMAS", "TRINDADE"]
 SNOWFLAKE_CONN_ID = "snowflake_default"
 SNOWFLAKE_DATABASE = "LAB_PIPELINE"
 DBT_PROJECT_DIR = "/usr/local/airflow/dags/dbt/inmet_project"
@@ -53,14 +55,52 @@ with DAG(
     # Create a copy task per city inside each year. Cities are executed sequentially within a year,
     # and years are executed sequentially after the previous year's cities finish.
     previous_year_done = None
+    # parse S3 bucket and optional prefix (S3_BUCKET may contain a prefix like 'bucket/prefix')
+    if "/" in S3_BUCKET:
+        bucket_name, initial_prefix = S3_BUCKET.split("/", 1)
+    else:
+        bucket_name, initial_prefix = S3_BUCKET, ""
+
+    # use the dbt project dir basename as an additional prefix in the bucket path
+    project_prefix = os.path.basename(DBT_PROJECT_DIR.strip("/"))
+
+    s3_client = boto3.client("s3")
+
     for year in YEARS:
-        prev_city_task = None
-        for city in CITIES:
-            s3_file_path = f"{year}/INMET_CO_GO_A002_{city}_01-01-{year}_A_31-12-{year}.CSV"
-            task_id = f"copy_{year}_{city}".lower()
+        prev_file_task = None
+
+        # build prefix to list objects for this year
+        prefix_parts = [p for p in (initial_prefix, project_prefix, str(year)) if p]
+        prefix_base = "/".join(prefix_parts)
+
+        # paginate through S3 objects under the prefix
+        keys: list[str] = []
+        continuation_token = None
+        while True:
+            list_kwargs = {"Bucket": bucket_name, "Prefix": prefix_base}
+            if continuation_token:
+                list_kwargs["ContinuationToken"] = continuation_token
+            resp = s3_client.list_objects_v2(**list_kwargs)
+            for obj in resp.get("Contents", []):
+                key = obj.get("Key")
+                if not key or key.endswith("/"):
+                    continue
+                keys.append(key)
+            if not resp.get("IsTruncated"):
+                break
+            continuation_token = resp.get("NextContinuationToken")
+
+        # create a COPY task for each object found
+        for key in keys:
+            # sanitize a short task id from the key
+            safe_name = re.sub(r"[^a-z0-9_]+", "_", os.path.splitext(os.path.basename(key))[0].lower())
+            task_id = f"copy_{year}_{safe_name}"
+            # avoid duplicate task ids
             if task_id in dag.task_dict:
                 copy_task = dag.get_task(task_id)
             else:
+                # use the full object key relative to the stage (the stage should be configured to the bucket root)
+                s3_file_path = key
                 copy_task = SQLExecuteQueryOperator(
                     task_id=task_id,
                     conn_id=SNOWFLAKE_CONN_ID,
@@ -93,25 +133,34 @@ with DAG(
                     """,
                 )
 
-            # chain tasks: within a year, cities run sequentially
-            if prev_city_task is None:
-                # first city of this year
+            # chain tasks: within a year, files run sequentially
+            if prev_file_task is None:
+                # first file of this year
                 if previous_year_done is None:
                     create_file_format >> copy_task
                 else:
                     previous_year_done >> copy_task
             else:
-                prev_city_task >> copy_task
+                prev_file_task >> copy_task
 
-            prev_city_task = copy_task
-            # once all cities for the year are created, add a small 'year done' task
-            year_done_id = f"year_{year}_done"
-            if year_done_id in dag.task_dict:
-                year_done = dag.get_task(year_done_id)
+            prev_file_task = copy_task
+
+        # once all files for the year are created, add a small 'year done' task
+        year_done_id = f"year_{year}_done"
+        if year_done_id in dag.task_dict:
+            year_done = dag.get_task(year_done_id)
+        else:
+            year_done = EmptyOperator(task_id=year_done_id)
+        # last file's task should signal the year's completion
+        if prev_file_task is not None:
+            prev_file_task >> year_done
+        else:
+            # if no files found, chain from the file format creation (so the DAG still progresses)
+            if previous_year_done is None:
+                create_file_format >> year_done
             else:
-                year_done = EmptyOperator(task_id=year_done_id)
-            # last city's task should signal the year's completion
-            prev_city_task >> year_done
-            # next year will wait on this
-            previous_year_done = year_done
+                previous_year_done >> year_done
+
+        # next year will wait on this
+        previous_year_done = year_done
     
