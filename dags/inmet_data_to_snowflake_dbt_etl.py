@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 # Define S3 and Snowflake parameters
-YEAR_INITIAL = 2000
+YEAR_INITIAL = 2001
 S3_BUCKET = "ml-politicas-energeticas"
 SNOWFLAKE_CONN_ID = "snowflake_default"
 SNOWFLAKE_DATABASE = "LAB_PIPELINE"
@@ -59,8 +59,7 @@ default_args = {
     "email_on_failure": False,
     "email_on_retry": False,
     "retries": 1,
-    "retry_delay": timedelta(minutes=5),
-    "skippable": False,  # Ensure tasks are not skipped by default
+    "retry_delay": timedelta(minutes=5)
 }
 
 @dag(
@@ -72,7 +71,7 @@ default_args = {
     catchup=False,
     tags=["elt", "snowflake", "dbt", "s3", "taskflow"],
 )
-def inmet_data_to_snowflake_dbt_etl_decorators():
+def inmet_data_to_snowflake_dbt_etl():
 
     
     # 1. Create a Snowflake File Format in the RAW schema
@@ -204,4 +203,4 @@ def inmet_data_to_snowflake_dbt_etl_decorators():
         # Update for next year to wait for this year's completion
         previous_year_task = year_group
     
-dag = inmet_data_to_snowflake_dbt_etl_decorators()
+dag = inmet_data_to_snowflake_dbt_etl()

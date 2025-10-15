@@ -16,7 +16,7 @@ default_args = {
 }
 
 @dag(
-    dag_id="clean_s3_keep_go_csvs",
+    dag_id="inmet_data_cleaner",
     default_args=default_args,
     description="Clean S3 bucket, leaving only CSVs containing GO",
     schedule_interval="@once",  # adjust if you want periodic runs

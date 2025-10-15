@@ -22,7 +22,7 @@ default_args = {
 }
 
 @dag(
-    dag_id="inmet_csv_to_s3_decorators",
+    dag_id="inmet_data_download_all",
     default_args=default_args,
     description="Download INMET CSV, unzip, and upload to S3 (decorators version)",
     schedule_interval="@once",  # adjust if you want periodic runs
@@ -30,7 +30,7 @@ default_args = {
     catchup=False,
     tags=["inmet", "s3", "csv"],
 )
-def inmet_csv_to_s3():
+def inmet_data_download_all():
 
     @task
     def get_years():
@@ -79,5 +79,5 @@ def inmet_csv_to_s3():
 
     process_all
 
-dag = inmet_csv_to_s3()
+dag = inmet_data_download_all()
 

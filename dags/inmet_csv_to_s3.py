@@ -22,7 +22,7 @@ default_args = {
 }
 
 @dag(
-    dag_id="inmet_csv_to_s3_decorators",
+    dag_id="inmet_csv_to_s3",
     default_args=default_args,
     description="Download INMET CSV, unzip, and upload to S3 (decorators version)",
     schedule_interval="@once",  # adjust if you want periodic runs
