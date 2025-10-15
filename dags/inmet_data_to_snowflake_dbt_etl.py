@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 # Define S3 and Snowflake parameters
+YEAR_INITIAL = 2000
 S3_BUCKET = "ml-politicas-energeticas"
 SNOWFLAKE_CONN_ID = "snowflake_default"
 SNOWFLAKE_DATABASE = "LAB_PIPELINE"
@@ -34,7 +35,7 @@ def get_years_to_process():
     current_year = datetime.now().year
     # NOTE: Set the end year explicitly to the current time context (2025)
     # If this DAG were run in 2026, it would include 2026.
-    return list(range(2000, 2025 + 1))  # começar de 2000, incluindo 2025
+    return list(range(YEAR_INITIAL, current_year + 1))  # começar de 2000, incluindo 2025
 
 def get_files_in_bucket(bucket: str, prefix: str) -> list:
     """List all CSV files in a given S3 bucket with the specified prefix (year)."""
@@ -59,10 +60,11 @@ default_args = {
     "email_on_retry": False,
     "retries": 1,
     "retry_delay": timedelta(minutes=5),
+    "skippable": False,  # Ensure tasks are not skipped by default
 }
 
 @dag(
-    dag_id="inmet_data_to_snowflake_dbt_etl_2",
+    dag_id="inmet_data_to_snowflake_dbt_etl",
     default_args=default_args,
     description="INMET CSV data to Snowflake, using DBT for transformations.",
     schedule_interval="@once",
@@ -157,9 +159,7 @@ def inmet_data_to_snowflake_dbt_etl_decorators():
                    $19 AS "vento_velocidade_horaria_(m/s)"
                 FROM @{SNOWFLAKE_DATABASE}.{SNOWFLAKE_STAGE}.STAGE_RAW/{s3_file_path}
                 (FILE_FORMAT => '{FULLY_QUALIFIED_FILE_FORMAT}')
-            )
-            FILE_FORMAT = (FORMAT_NAME = '{FULLY_QUALIFIED_FILE_FORMAT}')
-            ON_ERROR = 'ABORT_STATEMENT';
+            );
         """
         
         # Execute using Snowflake Hook
