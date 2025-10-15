@@ -1,0 +1,48 @@
+version: 2
+
+sources:
+  - name: raw
+    database: LAB_PIPELINE
+    schema: RAW
+    tables:
+      - name: stg_inmet_data
+        description: "Raw INMET meteorological data imported from S3"
+        columns:
+          - name: Data
+            description: "Observation date"
+          - name: hora_utc
+            description: "Observation time in UTC"
+          - name: precipitação_total_horário_(mm)
+            description: "Total hourly precipitation in mm"
+          - name: pressao_atmosferica_ao_nivel_da_estacao_horaria_(m-b)
+            description: "Atmospheric pressure at station level in mb"
+          - name: pressão_atmosferica_maxna_hora_ant_(aut)_(m-b)
+            description: "Maximum atmospheric pressure in previous hour (automatic) in mb"
+          - name: pressão_atmosferica_min_na_hora_ant_(aut)_(m-b)
+            description: "Minimum atmospheric pressure in previous hour (automatic) in mb"
+          - name: radiacao_global_(kj/m²)
+            description: "Global radiation in Kj/m²"
+          - name: temperatura_do_ar_bulbo_seco_horaria_(°c)
+            description: "Dry bulb air temperature in °C"
+          - name: temperatura_do_ponto_de_orvalho_(°c)
+            description: "Dew point temperature in °C"
+          - name: temperatura_máxima_na_hora_ant_(aut)_(°c)
+            description: "Maximum temperature in previous hour (automatic) in °C"
+          - name: temperatura_mínima_na_hora_ant_(aut)_(°c)
+            description: "Minimum temperature in previous hour (automatic) in °C"
+          - name: temperatura_orvalho_max_na_hora_ant_(aut)_(°c)
+            description: "Maximum dew point temperature in previous hour (automatic) in °C"
+          - name: temperatura_orvalho_min_na_hora_ant_(aut)_(°c)
+            description: "Minimum dew point temperature in previous hour (automatic) in °C"
+          - name: umidade_rel_max_na_hora_ant_(aut)_(%)
+            description: "Maximum relative humidity in previous hour (automatic) in %"
+          - name: umidade_rel_min_na_hora_ant_(aut)_(%)
+            description: "Minimum relative humidity in previous hour (automatic) in %"
+          - name: umidade_relativa_do_ar_horaria_(%)
+            description: "Relative air humidity in %"
+          - name: vento_direcao_horaria_(gr)_(°_(gr))
+            description: "Hourly wind direction in degrees"
+          - name: vento_rajada_maxima_(m/s)
+            description: "Maximum wind gust in m/s"
+          - name: vento_velocidade_horaria_(m/s)
+            description: "Hourly wind speed in m/s"

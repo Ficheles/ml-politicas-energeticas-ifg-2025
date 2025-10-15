@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Script to fix file names in S3 bucket by replacing spaces with underscores.
-Specifically targets files in the INMET data bucket that may have spaces in their names.
+Script to fix file names in S3 bucket by:
+- Replacing spaces with underscores
+- Removing parentheses ( and )
+
+Specifically targets files in the INMET data bucket that may have special characters.
 
 Author: Data Engineering Team
 Date: October 2025
@@ -44,17 +47,17 @@ class S3FileRenamer:
         self.error_count = 0
         self.skipped_count = 0
         
-    def list_files_with_spaces(self, prefix: str) -> List[str]:
+    def list_files_with_special_chars(self, prefix: str) -> List[str]:
         """
-        List all files in the bucket with the given prefix that contain spaces.
+        List all files in the bucket with the given prefix that contain spaces or parentheses.
         
         Args:
             prefix: S3 prefix to search within
             
         Returns:
-            List of S3 keys that contain spaces
+            List of S3 keys that contain spaces, '(' or ')'
         """
-        files_with_spaces = []
+        files_to_rename = []
         paginator = self.s3_client.get_paginator('list_objects_v2')
         
         try:
@@ -69,29 +72,33 @@ class S3FileRenamer:
                     
                 for obj in page['Contents']:
                     key = obj['Key']
-                    # Check if the filename (not the full path) contains spaces
+                    # Check if the filename (not the full path) contains spaces or parentheses
                     filename = key.split('/')[-1]
-                    if ' ' in filename:
-                        files_with_spaces.append(key)
+                    if ' ' in filename or '(' in filename or ')' in filename:
+                        files_to_rename.append(key)
                         
         except ClientError as e:
             logger.error(f"Error listing files with prefix {prefix}: {e}")
             
-        return files_with_spaces
+        return files_to_rename
     
     def generate_new_key(self, old_key: str) -> str:
         """
-        Generate new key by replacing spaces with underscores in filename.
+        Generate new key by removing spaces, parentheses from filename.
+        Also replaces spaces with underscores.
         
         Args:
             old_key: Original S3 key
             
         Returns:
-            New S3 key with spaces replaced by underscores
+            New S3 key with spaces replaced by underscores and parentheses removed
         """
         parts = old_key.split('/')
         filename = parts[-1]
+        # Replace spaces with underscores, remove parentheses
         new_filename = filename.replace(' ', '_')
+        new_filename = new_filename.replace('(', '')
+        new_filename = new_filename.replace(')', '')
         parts[-1] = new_filename
         return '/'.join(parts)
     
@@ -154,19 +161,19 @@ class S3FileRenamer:
         logger.info(f"Prefix: {prefix}")
         logger.info(f"{'='*60}")
         
-        # Get list of files with spaces
-        files_with_spaces = self.list_files_with_spaces(prefix)
+        # Get list of files with spaces or parentheses
+        files_to_rename = self.list_files_with_special_chars(prefix)
         
-        if not files_with_spaces:
-            logger.info(f"No files with spaces found for year {year}")
+        if not files_to_rename:
+            logger.info(f"No files with special characters found for year {year}")
             return {'renamed': 0, 'errors': 0, 'skipped': 0}
         
-        logger.info(f"Found {len(files_with_spaces)} files with spaces in names")
+        logger.info(f"Found {len(files_to_rename)} files with special characters (spaces, parentheses)")
         
         year_renamed = 0
         year_errors = 0
         
-        for old_key in files_with_spaces:
+        for old_key in files_to_rename:
             new_key = self.generate_new_key(old_key)
             
             if old_key == new_key:
@@ -229,7 +236,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Rename S3 files by replacing spaces with underscores'
+        description='Rename S3 files by replacing spaces with underscores and removing parentheses'
     )
     parser.add_argument(
         '--bucket',
