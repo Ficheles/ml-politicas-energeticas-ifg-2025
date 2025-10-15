@@ -1,21 +1,23 @@
 from __future__ import annotations
 
 import pendulum
-import os
-import re
-import boto3
+import logging
+import time
 from airflow.models.dag import DAG
 from airflow.utils.dates import days_ago
-
+from airflow.decorators import dag, task, task_group
+from airflow.utils.task_group import TaskGroup
 # Using the generic SQL operator for stability
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator 
 from airflow.operators.bash import BashOperator 
 from airflow.operators.empty import EmptyOperator
+from datetime import datetime, timedelta
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Define S3 and Snowflake parameters
-S3_BUCKET = "ml-politicas-energeticas/inmet"
-# define years to iterate
-YEARS = [2020, 2021, 2022, 2023, 2024, 2025]
+S3_BUCKET = "ml-politicas-energeticas"
 SNOWFLAKE_CONN_ID = "snowflake_default"
 SNOWFLAKE_DATABASE = "LAB_PIPELINE"
 DBT_PROJECT_DIR = "/usr/local/airflow/dags/dbt/inmet_project"
@@ -24,13 +26,52 @@ SNOWFLAKE_STAGING_TABLE = f"{SNOWFLAKE_STAGE}.STG_INMET_DATA"
 FULLY_QUALIFIED_TABLE = f"{SNOWFLAKE_DATABASE}.{SNOWFLAKE_STAGING_TABLE}"
 FULLY_QUALIFIED_FILE_FORMAT = f"{SNOWFLAKE_DATABASE}.{SNOWFLAKE_STAGE}.INMET_CSV_FORMAT"
 
-with DAG(
-    dag_id="inmet_data_to_snowflake_dbt_etl",
-    start_date=days_ago(1),
-    schedule=None,
+
+
+# Function to get the list of years dynamically
+def get_years_to_process():
+    """Generates the list of years from 2000 up to the current year (2025)."""
+    current_year = datetime.now().year
+    # NOTE: Set the end year explicitly to the current time context (2025)
+    # If this DAG were run in 2026, it would include 2026.
+    return list(range(2000, 2025 + 1))  # começar de 2000, incluindo 2025
+
+def get_files_in_bucket(bucket: str, prefix: str) -> list:
+    """List all CSV files in a given S3 bucket with the specified prefix (year)."""
+    import boto3
+    s3_client = boto3.client("s3")
+    paginator = s3_client.get_paginator("list_objects_v2")
+    page_iterator = paginator.paginate(Bucket=bucket, Prefix=prefix)
+
+    files = []
+    for page in page_iterator:
+        if "Contents" in page:
+            for obj in page["Contents"]:
+                key = obj["Key"]
+                if key.lower().endswith(".csv"):
+                    files.append(key)
+    return files
+
+default_args = {
+    "owner": "airflow",
+    "depends_on_past": False,
+    "email_on_failure": False,
+    "email_on_retry": False,
+    "retries": 1,
+    "retry_delay": timedelta(minutes=5),
+}
+
+@dag(
+    dag_id="inmet_data_to_snowflake_dbt_etl_2",
+    default_args=default_args,
+    description="INMET CSV data to Snowflake, using DBT for transformations.",
+    schedule_interval="@once",
+    start_date=datetime(2025, 1, 1),
     catchup=False,
-    tags=["elt", "snowflake", "dbt", "s3"],
-) as dag:
+    tags=["elt", "snowflake", "dbt", "s3", "taskflow"],
+)
+def inmet_data_to_snowflake_dbt_etl_decorators():
+
     
     # 1. Create a Snowflake File Format in the RAW schema
     create_file_format = SQLExecuteQueryOperator(
@@ -50,117 +91,117 @@ with DAG(
         """,
     )
 
-    # 2. Load data from S3 to the existing Snowflake Staging Table para cada ano de 2020 a 2025
 
-    # Create a copy task per city inside each year. Cities are executed sequentially within a year,
-    # and years are executed sequentially after the previous year's cities finish.
-    previous_year_done = None
-    # parse S3 bucket and optional prefix (S3_BUCKET may contain a prefix like 'bucket/prefix')
-    if "/" in S3_BUCKET:
-        bucket_name, initial_prefix = S3_BUCKET.split("/", 1)
-    else:
-        bucket_name, initial_prefix = S3_BUCKET, ""
+    @task
+    def generate_file_list(year: int):
+        """Generate list of files to process for a specific year."""
+        files_to_process = []
 
-    # use the dbt project dir basename as an additional prefix in the bucket path
-    project_prefix = os.path.basename(DBT_PROJECT_DIR.strip("/"))
+        # Correct prefix format for S3: "inmet/YEAR/"
+        prefix = f'inmet/{year}/'
+        filenames = get_files_in_bucket(S3_BUCKET, prefix)
 
-    s3_client = boto3.client("s3")
+        logger.info(f"[YEAR {year}] Generating file list for {len(filenames)} files")
 
-    for year in YEARS:
-        prev_file_task = None
-
-        # build prefix to list objects for this year
-        prefix_parts = [p for p in (initial_prefix, project_prefix, str(year)) if p]
-        prefix_base = "/".join(prefix_parts)
-
-        # paginate through S3 objects under the prefix
-        keys: list[str] = []
-        continuation_token = None
-        while True:
-            list_kwargs = {"Bucket": bucket_name, "Prefix": prefix_base}
-            if continuation_token:
-                list_kwargs["ContinuationToken"] = continuation_token
-            resp = s3_client.list_objects_v2(**list_kwargs)
-            for obj in resp.get("Contents", []):
-                key = obj.get("Key")
-                if not key or key.endswith("/"):
-                    continue
-                keys.append(key)
-            if not resp.get("IsTruncated"):
-                break
-            continuation_token = resp.get("NextContinuationToken")
-
-        # create a COPY task for each object found
-        for key in keys:
-            # sanitize a short task id from the key
-            safe_name = re.sub(r"[^a-z0-9_]+", "_", os.path.splitext(os.path.basename(key))[0].lower())
-            task_id = f"copy_{year}_{safe_name}"
-            # avoid duplicate task ids
-            if task_id in dag.task_dict:
-                copy_task = dag.get_task(task_id)
-            else:
-                # use the full object key relative to the stage (the stage should be configured to the bucket root)
-                s3_file_path = key
-                copy_task = SQLExecuteQueryOperator(
-                    task_id=task_id,
-                    conn_id=SNOWFLAKE_CONN_ID,
-                    sql=f"""
-                        COPY INTO {FULLY_QUALIFIED_TABLE}
-                        FROM (
-                            SELECT $1 AS "Data",
-                               $2 AS "hora_utc",
-                               $3 AS "precipitação_total_horário_(mm)",
-                               $4 AS "pressao_atmosferica_ao_nivel_da_estacao_horaria_(m-b)",
-                               $5 AS "pressão_atmosferica_maxna_hora_ant_(aut)_(m-b)",
-                               $6 AS "pressão_atmosferica_min_na_hora_ant_(aut)_(m-b)",
-                               $7 AS "radiacao_global_(kj/m²)",
-                               $8 AS "temperatura_do_ar_bulbo_seco_horaria_(°c)",
-                               $9 AS "temperatura_do_ponto_de_orvalho_(°c)",
-                               $10 AS "temperatura_máxima_na_hora_ant_(aut)_(°c)",
-                               $11 AS "temperatura_mínima_na_hora_ant_(aut)_(°c)",
-                               $12 AS "temperatura_orvalho_max_na_hora_ant_(aut)_(°c)",
-                               $13 AS "temperatura_orvalho_min_na_hora_ant_(aut)_(°c)",
-                               $14 AS "umidade_rel_max_na_hora_ant_(aut)_(%)",
-                               $15 AS "umidade_rel_min_na_hora_ant_(aut)_(%)",
-                               $16 AS "umidade_relativa_do_ar_horaria_(%)",
-                               $17 AS "vento_direcao_horaria_(gr)_(°_(gr))",
-                               $18 AS "vento_rajada_maxima_(m/s)",
-                               $19 AS "vento_velocidade_horaria_(m/s)"
-                            FROM @{SNOWFLAKE_DATABASE}.{SNOWFLAKE_STAGE}.STAGE_RAW/{s3_file_path}  (FILE_FORMAT => '{FULLY_QUALIFIED_FILE_FORMAT}')
-                        )
-                        FILE_FORMAT = (FORMAT_NAME = '{FULLY_QUALIFIED_FILE_FORMAT}')
-                        ON_ERROR = 'ABORT_STATEMENT';
-                    """,
-                )
-
-            # chain tasks: within a year, files run sequentially
-            if prev_file_task is None:
-                # first file of this year
-                if previous_year_done is None:
-                    create_file_format >> copy_task
-                else:
-                    previous_year_done >> copy_task
-            else:
-                prev_file_task >> copy_task
-
-            prev_file_task = copy_task
-
-        # once all files for the year are created, add a small 'year done' task
-        year_done_id = f"year_{year}_done"
-        if year_done_id in dag.task_dict:
-            year_done = dag.get_task(year_done_id)
-        else:
-            year_done = EmptyOperator(task_id=year_done_id)
-        # last file's task should signal the year's completion
-        if prev_file_task is not None:
-            prev_file_task >> year_done
-        else:
-            # if no files found, chain from the file format creation (so the DAG still progresses)
-            if previous_year_done is None:
-                create_file_format >> year_done
-            else:
-                previous_year_done >> year_done
-
-        # next year will wait on this
-        previous_year_done = year_done
+        for file in filenames:
+            # Extract just the filename from the full S3 key
+            filename = file.split('/')[-1] if '/' in file else file            
+            
+            file_info = {
+                'year': year,
+                'filename': filename,
+                's3_path': file[6:]  # relative S3 key path used by Snowflake stage without 'inmet/'
+            }
+            files_to_process.append(file_info)
+            logger.info(f"[YEAR {year}] Added to processing list: {file_info['filename']}")
+        
+        logger.info(f"[YEAR {year}] Total files to process: {len(files_to_process)}")
+        return files_to_process
     
+    # 3. Function to execute COPY INTO for a single file
+    @task
+    def copy_file_to_snowflake(file_info: dict):
+        """Execute Snowflake COPY INTO for a single CSV file."""
+        from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
+        
+        start_time = time.time()
+        year = file_info['year']
+        s3_file_path = file_info['s3_path']
+        filename = file_info['filename']
+        
+        logger.info(f"[YEAR {year}] Processing file: {filename}")
+        logger.info(f"[YEAR {year}] S3 path: {s3_file_path}")
+        
+        # SQL to execute
+        sql = f"""
+            COPY INTO {FULLY_QUALIFIED_TABLE}
+            FROM (
+                SELECT $1 AS "Data",
+                   $2 AS "hora_utc",
+                   $3 AS "precipitação_total_horário_(mm)",
+                   $4 AS "pressao_atmosferica_ao_nivel_da_estacao_horaria_(m-b)",
+                   $5 AS "pressão_atmosferica_maxna_hora_ant_(aut)_(m-b)",
+                   $6 AS "pressão_atmosferica_min_na_hora_ant_(aut)_(m-b)",
+                   $7 AS "radiacao_global_(kj/m²)",
+                   $8 AS "temperatura_do_ar_bulbo_seco_horaria_(°c)",
+                   $9 AS "temperatura_do_ponto_de_orvalho_(°c)",
+                   $10 AS "temperatura_máxima_na_hora_ant_(aut)_(°c)",
+                   $11 AS "temperatura_mínima_na_hora_ant_(aut)_(°c)",
+                   $12 AS "temperatura_orvalho_max_na_hora_ant_(aut)_(°c)",
+                   $13 AS "temperatura_orvalho_min_na_hora_ant_(aut)_(°c)",
+                   $14 AS "umidade_rel_max_na_hora_ant_(aut)_(%)",
+                   $15 AS "umidade_rel_min_na_hora_ant_(aut)_(%)",
+                   $16 AS "umidade_relativa_do_ar_horaria_(%)",
+                   $17 AS "vento_direcao_horaria_(gr)_(°_(gr))",
+                   $18 AS "vento_rajada_maxima_(m/s)",
+                   $19 AS "vento_velocidade_horaria_(m/s)"
+                FROM @{SNOWFLAKE_DATABASE}.{SNOWFLAKE_STAGE}.STAGE_RAW/{s3_file_path}
+                (FILE_FORMAT => '{FULLY_QUALIFIED_FILE_FORMAT}')
+            )
+            FILE_FORMAT = (FORMAT_NAME = '{FULLY_QUALIFIED_FILE_FORMAT}')
+            ON_ERROR = 'ABORT_STATEMENT';
+        """
+        
+        # Execute using Snowflake Hook
+        hook = SnowflakeHook(snowflake_conn_id=SNOWFLAKE_CONN_ID)
+        result = hook.run(sql, autocommit=True)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"[YEAR {year}] File processed successfully in {elapsed:.2f}s")
+        logger.info(f"[YEAR {year}] Query result: {result}")
+        
+        return {
+            'filename': filename,
+            'year': year,
+            'elapsed_seconds': elapsed,
+            'status': 'success'
+        }
+    
+    # 4. Workflow execution with TaskFlow API using TaskGroup per year
+    # Process one year at a time sequentially
+    previous_year_task = create_file_format
+    
+    for year in get_years_to_process():
+        # Use TaskGroup class to avoid variable capture issues in loops
+        with TaskGroup(group_id=f"year_{year}") as year_group:
+            # Generate file list for this specific year
+            files_list = generate_file_list.override(task_id=f"generate_file_list")(
+                year=year
+            )
+            
+            # Use dynamic task mapping to process all files for this year
+            # Tasks will be named: year_XXXX.copy_file_to_snowflake[0], [1], etc.
+            copy_results = copy_file_to_snowflake.override(task_id=f"copy_file_to_snowflake").expand(
+                file_info=files_list
+            )
+            
+            # Ensure dependency within the group
+            files_list >> copy_results
+        
+        # Set up dependencies: previous year -> this year's tasks
+        previous_year_task >> year_group
+        
+        # Update for next year to wait for this year's completion
+        previous_year_task = year_group
+    
+dag = inmet_data_to_snowflake_dbt_etl_decorators()
